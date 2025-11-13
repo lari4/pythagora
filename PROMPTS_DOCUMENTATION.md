@@ -112,3 +112,92 @@ const {errors, skippedFiles, testsGenerated} = await unitTests.runProcessing();
 
 ---
 
+## 2. РАСШИРЕНИЕ СУЩЕСТВУЮЩИХ ТЕСТОВ (Expand Unit Tests)
+
+### 2.1. API Метод: `UnitTestsExpand.runProcessing()`
+
+**Назначение**: Расширение существующих юнит-тестов для увеличения покрытия кода и добавления новых edge cases.
+
+**Файл**: `src/helpers/unitTestsExpand.js:16-30`
+
+**Описание**: Этот метод анализирует существующие тесты и генерирует дополнительные тестовые случаи, чтобы улучшить покрытие кода и протестировать больше граничных случаев. Использует GPT-4 для интеллектуального расширения тестового набора.
+
+**Входные параметры**:
+
+```javascript
+const unitTestsExpand = new UnitTestsExpand(
+    {
+        pathToProcess: args.path,        // Путь к файлу или директории с тестами
+        pythagoraRoot: args.pythagora_root, // Корневая директория Pythagora
+        force: args.force                // Перезаписать существующие расширенные тесты
+    },
+    Api,                                 // API инстанс для обращения к GPT-4
+    {
+        isSaveTests: true,               // Сохранять ли сгенерированные тесты
+        screen,                          // UI screen для отображения прогресса
+        spinner,                         // UI spinner
+        scrollableContent                // UI scrollable content
+    }
+);
+```
+
+**Выходные данные**:
+
+```javascript
+const {errors, skippedFiles, testsGenerated} = await unitTestsExpand.runProcessing();
+// errors - массив ошибок, возникших при расширении
+// skippedFiles - массив файлов, которые были пропущены
+// testsGenerated - массив сгенерированных дополнительных тестов
+```
+
+**Что отправляется в промпт GPT-4**:
+1. Существующий набор тестов
+2. Исходный код функции, которая тестируется
+3. Текущее покрытие кода (code coverage)
+4. Запрос на генерацию дополнительных тестов для непокрытых путей и edge cases
+
+**Команда для запуска**:
+
+```bash
+# Для одного файла с тестами
+npx pythagora --expand-unit-tests --path <PATH_TO_YOUR_TEST_SUITE>
+
+# Для директории с тестами
+npx pythagora --expand-unit-tests --path ./path/to/tests/folder/
+```
+
+**Пример вызова в коде**:
+
+```javascript
+// src/helpers/unitTestsExpand.js:16-30
+const unitTestsExpand = new UnitTestsExpand(
+    {
+        pathToProcess: args.path,
+        pythagoraRoot: args.pythagora_root,
+        force: args.force
+    },
+    Api,
+    {
+        isSaveTests: true,
+        screen,
+        spinner,
+        scrollableContent
+    }
+);
+const {errors, skippedFiles, testsGenerated} = await unitTestsExpand.runProcessing();
+```
+
+**Особенности**:
+- Работает с существующими тестами, расширяя их
+- Помогает увеличить code coverage
+- Генерирует тесты для edge cases
+- Может обрабатывать как отдельные файлы, так и целые директории с тестами
+
+**Типичный use case**:
+Когда у вас уже есть базовые тесты, но вы хотите:
+- Увеличить покрытие кода
+- Добавить тесты для граничных случаев
+- Протестировать больше сценариев использования
+
+---
+
