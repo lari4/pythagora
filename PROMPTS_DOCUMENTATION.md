@@ -467,3 +467,246 @@ async function configureAuthFile(generatedTests) {
 
 ---
 
+## 4. REVIEW ИЗМЕНЕНИЙ (Test Review)
+
+**Файл**: `src/scripts/review.js`
+
+**Описание**: Функционал review не использует AI/GPT, но является важной частью workflow. Когда Pythagora запускается в режиме тестирования и обнаруживает изменения в поведении приложения (например, изменились данные в response или MongoDB запросы), эти изменения сохраняются для review.
+
+### 4.1. Интерактивный Review Процесс
+
+**Назначение**: Позволяет разработчику просматривать и принимать решения об изменениях в тестах.
+
+**Что сохраняется для review**:
+- Файл: `.pythagora/reviewData.json`
+- Содержит все обнаруженные изменения между захваченными тестами и текущим выполнением
+
+**Типы изменений, которые детектируются**:
+
+1. **Изменения в Response данных**
+   - Изменился status code
+   - Изменилась структура или содержимое response body
+
+2. **Изменения в MongoDB запросах**
+   - Новые запросы, которых не было в оригинальном тесте (`mongoQueryNotFound`)
+   - Запросы, которые не были выполнены (`mongoNotExecuted`)
+   - Изменения в результатах запросов (`mongoResDiff`)
+
+3. **Изменения в параметрах запроса**
+   - Query параметры
+   - Request body
+
+**Доступные действия при review**:
+
+```javascript
+const changesActions = {
+    A: {
+        fn: 'acceptChange',
+        msg: 'accept changes'        // Принять изменения и обновить тест
+    },
+    D: {
+        fn: 'deleteChange',
+        msg: 'delete test'           // Удалить тест полностью
+    },
+    S: {
+        fn: 'skipChange',
+        msg: 'skip test'             // Пропустить review этого теста
+    },
+    R: {
+        fn: 'getRunCmd',
+        msg: 'get command to run this test'  // Получить команду для запуска теста
+    },
+    Q: {
+        fn: 'quitReview',
+        msg: 'quit review'           // Выйти из review
+    }
+};
+```
+
+**Пример структуры изменения**:
+
+```javascript
+{
+    id: "test-id-123",
+    filename: "api-users.json",
+    endpoint: "/api/users",
+    method: "POST",
+    statusCode: {
+        capture: 200,    // Оригинальное значение в захваченном тесте
+        test: 201        // Новое значение при текущем выполнении
+    },
+    responseData: {
+        capture: {...},
+        test: {...}
+    },
+    intermediateData: {  // MongoDB запросы
+        capture: [...],
+        test: [...]
+    },
+    errors: [{
+        type: "mongoResultDifferent",
+        message: "..."
+    }]
+}
+```
+
+**Команда для запуска review**:
+
+```bash
+npx pythagora --review
+```
+
+**Процесс работы**:
+
+1. Система читает файл `.pythagora/reviewData.json`
+2. Для каждого изменения:
+   - Отображает оригинальные и новые значения
+   - Показывает различия в MongoDB запросах
+   - Предлагает выбрать действие (A/D/S/R/Q)
+3. После принятия изменения (A):
+   - Обновляет соответствующий тест файл
+   - Удаляет изменение из reviewData.json
+4. После удаления теста (D):
+   - Удаляет тест из файла
+   - Удаляет изменение из reviewData.json
+
+**Особенности**:
+- Не использует AI/GPT
+- Полностью интерактивный процесс
+- Помогает контролировать изменения в поведении приложения
+- Предотвращает автоматическое принятие breaking changes
+
+**Типичный use case**:
+Когда вы изменили код приложения и хотите:
+- Проверить, какие тесты были затронуты
+- Решить, являются ли изменения ожидаемыми
+- Обновить тесты в соответствии с новым поведением
+
+---
+
+## 5. ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: convertOldTestForGPT()
+
+**Назначение**: Преобразование внутреннего формата теста в формат, подходящий для отправки в GPT-4.
+
+**Файл**: `src/utils/legacy.js`
+
+**Описание**: Эта функция не является AI промптом, но критически важна для подготовки данных перед отправкой в GPT-4. Она преобразует поля и структуру данных для обеспечения совместимости.
+
+**Преобразования, которые выполняются**:
+
+```javascript
+function convertOldTestForGPT(originalTest) {
+    let test = _.cloneDeep(originalTest);
+
+    // Удаление ненужных полей
+    delete test.url;
+    delete test.trace;
+    delete test.traceId;
+    delete test.asyncStore;
+    delete test.traceLegacy;
+    delete test.createdAt;
+    delete test.params;
+
+    // Переименование полей
+    test.testId = test.id;              // id -> testId
+    delete test.id;
+
+    test.response = JSON.parse(test.responseData);  // responseData -> response (parsed)
+    delete test.responseData;
+
+    test.mongoQueryNum = test.mongoQueriesCapture;  // mongoQueriesCapture -> mongoQueryNum
+    delete test.mongoQueriesCapture;
+
+    test.reqQuery = test.query;         // query -> reqQuery
+    delete test.query;
+
+    test.reqBody = test.body;           // body -> reqBody
+    delete test.body;
+
+    // Преобразование MongoDB запросов
+    test.mongoQueries = test.intermediateData.map((item) => {
+        item.preQueryDocs = item.preQueryRes;      // preQueryRes -> preQueryDocs
+        delete item.preQueryRes;
+
+        item.postQueryDocs = item.postQueryRes;    // postQueryRes -> postQueryDocs
+        delete item.postQueryRes;
+
+        item.mongoResponse = item.mongoRes;        // mongoRes -> mongoResponse
+        delete item.mongoRes;
+
+        item.mongoQuery = item.query;              // query -> mongoQuery
+        delete item.query;
+
+        item.mongoOptions = item.options;          // options -> mongoOptions
+        delete item.options;
+
+        item.mongoOperation = item.op;             // op -> mongoOperation
+        delete item.op;
+
+        return item;
+    });
+    delete test.intermediateData;
+
+    return test;
+}
+```
+
+**Когда используется**:
+- Перед вызовом `Api.getJestTest()`
+- Перед вызовом `Api.isEligibleForExport()`
+- В любом месте, где нужно отправить тест данные в GPT-4
+
+**Важность**:
+Эта функция обеспечивает обратную совместимость и правильный формат данных для промптов GPT-4 на сервере Pythagora.
+
+---
+
+## 6. РЕЗЮМЕ: ВСЕ AI ПРОМПТЫ В СИСТЕМЕ
+
+### Промпты для генерации тестов:
+1. **UnitTests.runProcessing()** - Генерация юнит-тестов для функций
+2. **UnitTestsExpand.runProcessing()** - Расширение существующих тестов
+
+### Промпты для экспорта в Jest:
+3. **Api.getJestTest()** - Конвертация захваченного теста в Jest
+4. **Api.getJestTestName()** - Генерация имени для Jest теста
+5. **Api.getJestAuthFunction()** - Генерация auth функции
+6. **Api.isEligibleForExport()** - Проверка лимита токенов (не промпт, но проверка)
+
+### Местонахождение фактических промптов:
+Все фактические промпты находятся в репозитории Pythagora API:
+- https://github.com/Pythagora-io/api/tree/main/prompts
+
+### Модель AI:
+- Используется: **GPT-4** (для всех операций)
+- Ограничение: **8k tokens** для операций экспорта
+
+### Типы данных, отправляемых в промпты:
+1. **Исходный код** - функции JavaScript/TypeScript
+2. **Зависимости** - импорты и вызываемые функции
+3. **Тесты** - существующий код тестов
+4. **API данные** - запросы, ответы, headers
+5. **MongoDB данные** - запросы, состояние БД до/после
+6. **Метаданные** - endpoints, методы, status codes
+
+---
+
+## 7. РЕКОМЕНДАЦИИ ПО ИСПОЛЬЗОВАНИЮ
+
+### Для лучших результатов генерации юнит-тестов:
+1. Функции должны быть экспортированы
+2. Лучше всего работает для standalone/helper функций
+3. Избегайте сложных зависимостей в функциях
+
+### Для экспорта в Jest:
+1. Убедитесь, что тест не превышает 8k tokens
+2. Захватите login endpoint для генерации auth функции
+3. Проверяйте сгенерированные тесты перед коммитом
+
+### Для расширения тестов:
+1. Используйте после создания базовых тестов
+2. Помогает улучшить code coverage
+3. Генерирует тесты для edge cases
+
+---
+
