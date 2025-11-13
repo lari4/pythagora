@@ -540,3 +540,361 @@ describe('calculateTotal', () => {
 
 ---
 
+## 3. ПАЙПЛАЙН: ЭКСПОРТ В JEST
+
+**Команда**: `npx pythagora --export` или `--export --test-id <TEST_ID>`
+
+**Файл entry point**: `src/commands/export.js`
+
+**Основные handlers**: `src/helpers/exports.js`, `src/commands/export.js`
+
+**Описание**: Это самый сложный пайплайн, использующий **4 разных AI промпта** последовательно для конвертации захваченных integration тестов в Jest формат.
+
+### 3.1. ASCII Диаграмма Общего Потока
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ПОЛЬЗОВАТЕЛЬ                                 │
+│  npx pythagora --export                                         │
+│  (после захвата API тестов во время работы приложения)          │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              src/commands/export.js :: runExport()              │
+│  1. Инициализация директорий Pythagora                          │
+│  2. Cleanup data folder (удаление старых файлов)                │
+│  3. Чтение metadata и существующих экспортов                    │
+│  4. Получить все сгенерированные тесты                          │
+│  5. Создать default файлы (jest.config, etc)                    │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│   ┌──────────────── ЦИКЛ ПО КАЖДОМУ ТЕСТУ ─────────────────┐   │
+│   │                                                          │   │
+│   │  Для каждого захваченного теста (capturedTest):         │   │
+│   │                                                          │   │
+│   │  ┌────────────────────────────────────────────────────┐ │   │
+│   │  │ ШАГ 1: Проверка Token Limit                        │ │   │
+│   │  │ Api.isEligibleForExport(test)                      │ │   │
+│   │  │ └─> Если тест слишком большой -> SKIP             │ │   │
+│   │  └────────────────────────────────────────────────────┘ │   │
+│   │                       │                                  │   │
+│   │                       ▼                                  │   │
+│   │  ┌────────────────────────────────────────────────────┐ │   │
+│   │  │ ШАГ 2: Генерация Auth Function (один раз)          │ │   │
+│   │  │ Api.getJestAuthFunction(...)         [ПРОМПТ #1]   │ │   │
+│   │  │ └─> Сохранить в ./pythagora_tests/auth.js         │ │   │
+│   │  └────────────────────────────────────────────────────┘ │   │
+│   │                       │                                  │   │
+│   │                       ▼                                  │   │
+│   │  ┌────────────────────────────────────────────────────┐ │   │
+│   │  │ ШАГ 3: Конвертация Теста                          │ │   │
+│   │  │ Api.getJestTest(test)                [ПРОМПТ #2]   │ │   │
+│   │  │ └─> Получить Jest код                             │ │   │
+│   │  └────────────────────────────────────────────────────┘ │   │
+│   │                       │                                  │   │
+│   │                       ▼                                  │   │
+│   │  ┌────────────────────────────────────────────────────┐ │   │
+│   │  │ ШАГ 4: Генерация Имени Теста                       │ │   │
+│   │  │ Api.getJestTestName(jestTest, existingNames)       │ │   │
+│   │  │                                       [ПРОМПТ #3]   │ │   │
+│   │  │ └─> Получить уникальное имя файла                 │ │   │
+│   │  └────────────────────────────────────────────────────┘ │   │
+│   │                       │                                  │   │
+│   │                       ▼                                  │   │
+│   │  ┌────────────────────────────────────────────────────┐ │   │
+│   │  │ ШАГ 5: Сохранение Файлов                           │ │   │
+│   │  │ • ./pythagora_tests/<testName>.test.js             │ │   │
+│   │  │ • ./pythagora_tests/data/<testName>.json           │ │   │
+│   │  │ • Обновить exports metadata                        │ │   │
+│   │  └────────────────────────────────────────────────────┘ │   │
+│   │                                                          │   │
+│   └──────────────── ПОВТОР ДЛЯ СЛЕД. ТЕСТА ────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2. Детальный Поток с Промптами
+
+```
+╔═══════════════════════════════════════════════════════════════════╗
+║  ПРОМПТ #1: Генерация Auth Function (выполняется ОДИН РАЗ)       ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────┐
+│           configureAuthFile(generatedTests)                     │
+│           src/helpers/exports.js:38-68                          │
+│                                                                  │
+│  Шаги:                                                           │
+│  1. Прочитать .pythagora/metadata.json                          │
+│  2. Получить loginPath, loginRequestBody, loginMongoQueries     │
+│  3. Если данных нет -> найти login тест по endpoint             │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              API ЗАПРОС: getJestAuthFunction()                  │
+│                                                                  │
+│  Входные данные:                                                 │
+│  {                                                               │
+│    mongoQueriesArray: [{                                        │
+│      collection: "users",                                       │
+│      mongoOperation: "findOne",                                 │
+│      mongoQuery: { email: "test@test.com" },                    │
+│      preQueryDocs: [],                                          │
+│      postQueryDocs: [{...user...}],                             │
+│      mongoResponse: {...user...}                                │
+│    }],                                                           │
+│    requestBody: {                                               │
+│      email: "test@test.com",                                    │
+│      password: "password123"                                    │
+│    },                                                            │
+│    endpointPath: "/api/auth/login"                              │
+│  }                                                               │
+│                                                                  │
+│  ╔══════════════════════════════════════════════════╗           │
+│  ║          ПРОМПТ GPT-4                            ║           │
+│  ║  Создай функцию authenticate() для Jest тестов:  ║           │
+│  ║  1. Setup пользователя в БД из mongoQueries      ║           │
+│  ║  2. Сделай POST запрос на endpointPath           ║           │
+│  ║  3. Извлеки токен/cookie из ответа               ║           │
+│  ║  4. Верни токен для использования в тестах       ║           │
+│  ║  5. Используй supertest и mongodb-memory-server  ║           │
+│  ╚══════════════════════════════════════════════════╝           │
+│                                                                  │
+│  Выходные данные (код):                                          │
+│  - Полный код auth.js модуля                                    │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│               СОХРАНЕНИЕ: ./pythagora_tests/auth.js             │
+│  Этот файл будет импортироваться во всех тестах                 │
+└─────────────────────────────────────────────────────────────────┘
+
+
+╔═══════════════════════════════════════════════════════════════════╗
+║  ПРОМПТ #2: Проверка Token Limit (для КАЖДОГО теста)             ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────┐
+│              API ЗАПРОС: isEligibleForExport(test)              │
+│              src/commands/export.js:53                          │
+│                                                                  │
+│  • Это НЕ промпт, а проверка размера                            │
+│  • Подсчитывает токены в тесте                                  │
+│  • Если > GPT-4 8k limit -> return false                        │
+│  • Если <= GPT-4 8k limit -> return true, продолжить            │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼ (если eligible)
+
+
+╔═══════════════════════════════════════════════════════════════════╗
+║  ПРОМПТ #3: Конвертация Теста в Jest (для КАЖДОГО теста)         ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────┐
+│         exportTest(originalTest, exportsMetadata)               │
+│         src/helpers/exports.js:98-114                           │
+│                                                                  │
+│  Шаги:                                                           │
+│  1. convertOldTestForGPT(originalTest)                          │
+│     └─> Преобразовать формат данных                             │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              API ЗАПРОС: getJestTest(test)                      │
+│                                                                  │
+│  Входные данные (после convertOldTestForGPT):                   │
+│  {                                                               │
+│    testId: "abc123",                                            │
+│    endpoint: "/api/products",                                   │
+│    method: "GET",                                               │
+│    statusCode: 200,                                             │
+│    reqQuery: { category: "electronics" },                       │
+│    reqBody: {},                                                 │
+│    response: { products: [...], total: 10 },                    │
+│    mongoQueries: [                                              │
+│      {                                                           │
+│        collection: "products",                                  │
+│        mongoOperation: "find",                                  │
+│        mongoQuery: { category: "electronics" },                 │
+│        mongoOptions: {},                                        │
+│        preQueryDocs: [...docs before...],                       │
+│        postQueryDocs: [...docs after...],                       │
+│        mongoResponse: [...results...]                           │
+│      }                                                           │
+│    ]                                                             │
+│  }                                                               │
+│                                                                  │
+│  ╔══════════════════════════════════════════════════╗           │
+│  ║          ПРОМПТ GPT-4                            ║           │
+│  ║  Создай Jest тест для этого API endpoint:        ║           │
+│  ║  1. Импортируй app, supertest, auth              ║           │
+│  ║  2. Setup: подготовь БД (preQueryDocs)           ║           │
+│  ║  3. Execute: сделай HTTP запрос                   ║           │
+│  ║  4. Assert: проверь response и statusCode         ║           │
+│  ║  5. Assert: проверь mongoResponse                 ║           │
+│  ║  6. Assert: проверь postQueryDocs                 ║           │
+│  ║  7. Cleanup: очисти БД                            ║           │
+│  ║  8. Используй mongodb-memory-server для БД        ║           │
+│  ╚══════════════════════════════════════════════════╝           │
+│                                                                  │
+│  Выходные данные (код):                                          │
+│  - Полный Jest тест с describe() и it() блоками                 │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+
+
+╔═══════════════════════════════════════════════════════════════════╗
+║  ПРОМПТ #4: Генерация Имени Теста (для КАЖДОГО теста)            ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────┐
+│              API ЗАПРОС: getJestTestName()                      │
+│              src/helpers/exports.js:105                         │
+│                                                                  │
+│  Входные данные:                                                 │
+│  {                                                               │
+│    jestTest: "const request = require...\ndescribe...",         │
+│    existingNames: [                                             │
+│      "get-users-list.test.js",                                  │
+│      "post-user-create.test.js"                                 │
+│    ]                                                             │
+│  }                                                               │
+│                                                                  │
+│  ╔══════════════════════════════════════════════════╗           │
+│  ║          ПРОМПТ GPT-4                            ║           │
+│  ║  Проанализируй код Jest теста и создай имя:      ║           │
+│  ║  1. Отрази HTTP метод (get, post, put, delete)   ║           │
+│  ║  2. Отрази endpoint (/api/products -> products)  ║           │
+│  ║  3. Отрази сценарий (success, error, etc)        ║           │
+│  ║  4. Используй kebab-case                          ║           │
+│  ║  5. Добавь .test.js расширение                    ║           │
+│  ║  6. Убедись что имя уникально                     ║           │
+│  ╚══════════════════════════════════════════════════╝           │
+│                                                                  │
+│  Выходные данные:                                                │
+│  - "get-products-by-category.test.js"                           │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   СОХРАНЕНИЕ ФАЙЛОВ                             │
+│  1. ./pythagora_tests/<testName>.test.js (код Jest теста)       │
+│  2. ./pythagora_tests/data/<testName>.json (MongoDB данные)     │
+│  3. Обновить .pythagora/exportsMetadata.json                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 3.3. Пример Полного Потока Данных
+
+**1. Исходный захваченный тест**:
+```javascript
+{
+  id: "test123",
+  endpoint: "/api/products",
+  method: "GET",
+  query: { category: "electronics" },
+  body: {},
+  statusCode: 200,
+  responseData: '{"products":[...], "total":10}',
+  intermediateData: [
+    {
+      type: "mongodb",
+      collection: "products",
+      op: "find",
+      query: { category: "electronics" },
+      options: {},
+      preQueryRes: [...documents...],
+      postQueryRes: [...documents...],
+      mongoRes: [...results...]
+    }
+  ]
+}
+```
+
+**2. После convertOldTestForGPT()**:
+```javascript
+{
+  testId: "test123",
+  endpoint: "/api/products",
+  method: "GET",
+  reqQuery: { category: "electronics" },
+  reqBody: {},
+  statusCode: 200,
+  response: { products: [...], total: 10 },
+  mongoQueries: [
+    {
+      collection: "products",
+      mongoOperation: "find",
+      mongoQuery: { category: "electronics" },
+      mongoOptions: {},
+      preQueryDocs: [...],
+      postQueryDocs: [...],
+      mongoResponse: [...]
+    }
+  ]
+}
+```
+
+**3. После Api.getJestTest()** (код):
+```javascript
+const request = require('supertest');
+const { authenticate } = require('./auth');
+
+describe('GET /api/products', () => {
+  let token;
+
+  beforeAll(async () => {
+    token = await authenticate(app);
+  });
+
+  it('should return products by category', async () => {
+    // Setup DB
+    await db.collection('products').insertMany([...preQueryDocs...]);
+
+    // Make request
+    const response = await request(app)
+      .get('/api/products')
+      .query({ category: 'electronics' })
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    // Assertions
+    expect(response.body.products).toHaveLength(10);
+    expect(response.body.total).toBe(10);
+  });
+});
+```
+
+**4. После Api.getJestTestName()**:
+```javascript
+"get-products-by-category.test.js"
+```
+
+**5. Финальная структура файлов**:
+```
+./pythagora_tests/
+  ├── auth.js                                    (ПРОМПТ #1)
+  ├── get-products-by-category.test.js           (ПРОМПТ #3, имя из #4)
+  ├── data/
+  │   └── get-products-by-category.json          (MongoDB данные)
+  ├── jest.config.js
+  └── global-setup.js
+```
+
+### 3.4. Важные Особенности Пайплайна
+
+1. **Последовательность промптов**: Каждый промпт зависит от результата предыдущего
+2. **Auth генерируется один раз**: Используется во всех тестах
+3. **Валидация перед генерацией**: isEligibleForExport предотвращает ошибки
+4. **Преобразование данных**: convertOldTestForGPT обеспечивает правильный формат
+5. **Сохранение MongoDB данных**: Отдельный JSON файл для каждого теста
+
+---
+
