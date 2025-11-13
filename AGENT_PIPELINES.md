@@ -295,3 +295,248 @@ describe('calculateTotal', () => {
 
 ---
 
+## 2. ПАЙПЛАЙН: РАСШИРЕНИЕ ТЕСТОВ
+
+**Команда**: `npx pythagora --expand-unit-tests --path <PATH_TO_TEST_SUITE>`
+
+**Файл entry point**: `src/scripts/expandUnit.js`
+
+**Основной handler**: `src/helpers/unitTestsExpand.js`
+
+### 2.1. ASCII Диаграмма Потока
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ПОЛЬЗОВАТЕЛЬ                                 │
+│  npx pythagora --expand-unit-tests --path ./tests/helper.test.js│
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              src/scripts/expandUnit.js                          │
+│  • Читает аргументы (path к существующим тестам)                │
+│  • Вызывает expandTestsForDirectory(args)                       │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│    src/helpers/unitTestsExpand.js :: expandTestsForDirectory()  │
+│  1. Получить API конфигурацию                                   │
+│  2. Инициализировать UI (screen, spinner)                       │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│           Создание UnitTestsExpand объекта                      │
+│  const unitTestsExpand = new UnitTestsExpand(                   │
+│    { pathToProcess, pythagoraRoot, force },                     │
+│    Api,                                                          │
+│    { isSaveTests, screen, spinner, scrollableContent }          │
+│  )                                                               │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│     unitTestsExpand.runProcessing() - ОСНОВНАЯ ОБРАБОТКА        │
+│  [Из пакета @pythagora.io/js-code-processing]                  │
+│                                                                  │
+│  Шаги:                                                           │
+│  1. Чтение существующих тестов                                  │
+│     └─> Парсинг тестового файла                                 │
+│     └─> Извлечение всех test cases                              │
+│     └─> Анализ покрытия кода                                    │
+│                                                                  │
+│  2. Чтение исходного кода тестируемой функции                   │
+│     └─> Найти файл с исходным кодом                             │
+│     └─> Извлечь функцию, которая тестируется                    │
+│     └─> Найти зависимости                                       │
+│                                                                  │
+│  3. Анализ покрытия                                             │
+│     └─> Определить, какие пути кода не покрыты                  │
+│     └─> Определить, какие edge cases отсутствуют                │
+│     └─> Определить, какие сценарии можно добавить               │
+│                                                                  │
+│  4. Подготовка данных для GPT-4                                 │
+│     └─> Существующие тесты (код)                                │
+│     └─> Исходный код функции                                    │
+│     └─> Анализ непокрытых путей                                 │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    PYTHAGORA API SERVER                         │
+│                    (или OpenAI API)                             │
+│                                                                  │
+│  Входные данные (JSON):                                         │
+│  {                                                               │
+│    "existingTests": "код существующих тестов",                  │
+│    "functionCode": "код тестируемой функции",                   │
+│    "uncoveredPaths": ["путь 1", "путь 2", ...],                 │
+│    "dependencies": ["код зависимостей"],                        │
+│    "coverageReport": { ... }                                    │
+│  }                                                               │
+│                                                                  │
+│  ╔══════════════════════════════════════════════════╗           │
+│  ║          ПРОМПТ GPT-4 (на сервере)              ║           │
+│  ║  Расширь существующий набор тестов:              ║           │
+│  ║  - Проанализируй текущие тесты                   ║           │
+│  ║  - Определи непокрытые пути кода                 ║           │
+│  ║  - Добавь тесты для edge cases                   ║           │
+│  ║  - Добавь тесты для новых сценариев              ║           │
+│  ║  - Сохрани существующий стиль тестов             ║           │
+│  ╚══════════════════════════════════════════════════╝           │
+│                                                                  │
+│  Выходные данные (string):                                      │
+│  - Дополнительные test cases (только новые it() блоки)          │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│           ОБРАБОТКА РЕЗУЛЬТАТА (в runProcessing)                │
+│  • Получить новые test cases от GPT-4                           │
+│  • Объединить с существующими тестами                           │
+│  • Сохранить расширенный файл (или создать новый)               │
+│  • Обновить UI (показать прогресс)                              │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              ВОЗВРАТ РЕЗУЛЬТАТОВ                                │
+│  const {errors, skippedFiles, testsGenerated} =                 │
+│        await unitTestsExpand.runProcessing()                    │
+│                                                                  │
+│  • errors: [] - ошибки при расширении                           │
+│  • skippedFiles: [] - пропущенные файлы                         │
+│  • testsGenerated: [{testPath, ...}] - расширенные тесты        │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│               ВЫВОД РЕЗУЛЬТАТОВ ПОЛЬЗОВАТЕЛЮ                    │
+│  • Если errors.length > 0:                                      │
+│    └─> Сохранить в errorLogs.log                                │
+│  • Если testsGenerated.length > 0:                              │
+│    └─> Вывести пути к расширенным тестам                        │
+│    └─> "X unit tests generated!" (дополнительные тесты)         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2. Сравнение с Генерацией Тестов
+
+| Аспект | Генерация Тестов | Расширение Тестов |
+|--------|------------------|-------------------|
+| **Вход** | Исходный код функции | Существующие тесты + исходный код |
+| **Цель** | Создать тесты с нуля | Добавить больше тестов |
+| **Анализ** | AST парсинг функции | Анализ покрытия + AST |
+| **Выход** | Полный тестовый файл | Дополнительные test cases |
+| **Когда использовать** | Нет тестов | Есть базовые тесты |
+
+### 2.3. Структура Данных На Каждом Этапе
+
+**Вход (существующий тест файл)**:
+```javascript
+// ./tests/helper.test.js
+describe('calculateTotal', () => {
+  it('should calculate total for valid items', () => {
+    const items = [{ price: 10 }, { price: 20 }];
+    expect(calculateTotal(items)).toBe(30);
+  });
+});
+```
+
+**После анализа**:
+```javascript
+{
+  existingTests: {
+    file: './tests/helper.test.js',
+    testCases: [
+      {
+        description: 'should calculate total for valid items',
+        code: '...',
+        coveredPaths: ['basic-case']
+      }
+    ],
+    totalTests: 1
+  },
+  sourceFunction: {
+    name: 'calculateTotal',
+    code: 'function calculateTotal(items) { ... }',
+    branches: ['empty-array', 'null-input', 'invalid-items', 'basic-case'],
+    coveredBranches: ['basic-case'],
+    uncoveredBranches: ['empty-array', 'null-input', 'invalid-items']
+  }
+}
+```
+
+**Запрос к GPT-4**:
+```javascript
+{
+  existingTests: "describe('calculateTotal', () => { ... })",
+  functionCode: "function calculateTotal(items) { ... }",
+  uncoveredPaths: ['empty-array', 'null-input', 'invalid-items'],
+  coverageReport: {
+    totalBranches: 4,
+    coveredBranches: 1,
+    coveragePercent: 25
+  }
+}
+```
+
+**Ответ от GPT-4** (новые test cases):
+```javascript
+`
+  it('should return 0 for empty array', () => {
+    expect(calculateTotal([])).toBe(0);
+  });
+
+  it('should throw error for null input', () => {
+    expect(() => calculateTotal(null)).toThrow();
+  });
+
+  it('should handle items with invalid prices', () => {
+    const items = [{ price: 10 }, { price: 'invalid' }];
+    expect(calculateTotal(items)).toBe(10);
+  });
+`
+```
+
+**Финальный результат** (объединённый файл):
+```javascript
+describe('calculateTotal', () => {
+  // Существующий тест
+  it('should calculate total for valid items', () => {
+    const items = [{ price: 10 }, { price: 20 }];
+    expect(calculateTotal(items)).toBe(30);
+  });
+
+  // НОВЫЕ ТЕСТЫ от GPT-4
+  it('should return 0 for empty array', () => {
+    expect(calculateTotal([])).toBe(0);
+  });
+
+  it('should throw error for null input', () => {
+    expect(() => calculateTotal(null)).toThrow();
+  });
+
+  it('should handle items with invalid prices', () => {
+    const items = [{ price: 10 }, { price: 'invalid' }];
+    expect(calculateTotal(items)).toBe(10);
+  });
+});
+```
+
+### 2.4. Ключевые Отличия в Промпте
+
+**Генерация тестов** (промпт):
+- "Создай тесты для этой функции"
+- Фокус на полном покрытии с нуля
+
+**Расширение тестов** (промпт):
+- "Вот существующие тесты: [код]"
+- "Вот что НЕ покрыто: [список]"
+- "Добавь тесты для непокрытых путей"
+- "Сохрани стиль существующих тестов"
+- Фокус на дополнении, а не замене
+
+---
+
